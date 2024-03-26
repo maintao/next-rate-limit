@@ -1,0 +1,22 @@
+{
+  "name": "@fnmain/next-rate-limit",
+  "version": "0.0.1",
+  "description": "Rate limit for next.js API",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "pub": "npm run build && npm publish --access public --registry=https://registry.npmjs.org/ && node sync-npmmirror.js "
+  },
+  "author": "DC",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.8.3",
+    "ioredis": ">=5",
+    "typescript": "^5.2.2"
+  }
+}
