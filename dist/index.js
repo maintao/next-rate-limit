@@ -25,12 +25,12 @@ const getCurrentCount = (redisKey, { redisClient, windowMs }) => __awaiter(void 
       redis.call("pexpire", KEYS[1], ARGV[1])
     end
     return current`;
-        function errorHandler(err) {
+        function errorNextApiHandler(err) {
             reject(err);
         }
-        redisClient.once("error", errorHandler);
+        redisClient.once("error", errorNextApiHandler);
         redisClient.eval(lua, 1, redisKey, windowMs, (err, result) => {
-            redisClient.removeListener("error", errorHandler);
+            redisClient.removeListener("error", errorNextApiHandler);
             if (err) {
                 reject(err);
             }
@@ -56,23 +56,25 @@ function getKey(req, { keyGenerator }) {
         return key;
     });
 }
-function RateLimitWrap(handler, options) {
+function RateLimitWrap(NextApiHandler, options) {
     return (req, res) => __awaiter(this, void 0, void 0, function* () {
+        const { skip, onLimitReached, maxAmount } = options;
         try {
             const key = yield getKey(req, options);
+            if (skip && (yield skip(req, key))) {
+                return yield NextApiHandler(req, res); // 没有限流，调用下一层
+            }
             const count = yield getCurrentCount(key, options);
-            if (count > options.maxAmount) {
-                if (options.onLimitReached) {
-                    yield options.onLimitReached(req, res, handler, key, count);
+            if (count > maxAmount) {
+                if (onLimitReached) {
+                    return yield onLimitReached(req, res, NextApiHandler, key, count);
                 }
                 else {
-                    res.statusCode = 429;
-                    res.setHeader("Content-Type", "application/json");
-                    res.end(JSON.stringify({ code: 1, errMsg: "too many requests" }));
+                    res.status(429).json({ code: 1, errMsg: "Too many requests" });
                 }
             }
             else {
-                yield handler(req, res); // 没有限流，调用下一层
+                return yield NextApiHandler(req, res); // 没有限流，调用下一层
             }
         }
         catch (error) { }
