@@ -9,28 +9,27 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RateLimitWrap = exports.getClientIp = void 0;
+exports.RateLimitWrap = exports.getUrlWithParsedQuery = exports.getClientIp = void 0;
 const url_1 = require("url");
 function getClientIp(req) {
     const ip = req.headers["x-real-ip"] || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
     return ip;
 }
 exports.getClientIp = getClientIp;
-const getCurrentCount = (redisKey, { redisClient, windowMs }) => __awaiter(void 0, void 0, void 0, function* () {
+function getUrlWithParsedQuery(req) {
+    return (0, url_1.parse)(req.url, true);
+}
+exports.getUrlWithParsedQuery = getUrlWithParsedQuery;
+const getCurrentCount = (redisClient, redisKey, windowMs) => __awaiter(void 0, void 0, void 0, function* () {
     return new Promise((resolve, reject) => {
         const lua = `
-    local current
-    current = tonumber(redis.call("incr", KEYS[1]))
-    if current == 1 then
+    local count
+    count = tonumber(redis.call("incr", KEYS[1]))
+    if count == 1 then
       redis.call("pexpire", KEYS[1], ARGV[1])
     end
-    return current`;
-        function errorNextApiHandler(err) {
-            reject(err);
-        }
-        redisClient.once("error", errorNextApiHandler);
+    return count`;
         redisClient.eval(lua, 1, redisKey, windowMs, (err, result) => {
-            redisClient.removeListener("error", errorNextApiHandler);
             if (err) {
                 reject(err);
             }
@@ -40,44 +39,54 @@ const getCurrentCount = (redisKey, { redisClient, windowMs }) => __awaiter(void 
         });
     });
 });
-function getKey(req, { keyGenerator }) {
-    return __awaiter(this, void 0, void 0, function* () {
-        let key;
-        if (keyGenerator) {
-            key = yield keyGenerator(req);
-        }
-        else {
-            // 没指定 keyGenerator，使用默认的规则：根据请求的路径和 IP 生成 key
-            const ip = getClientIp(req);
-            const path = (0, url_1.parse)(req.url, true).pathname;
-            key = `next-rate-limit:path=${path}:ip=${ip}`;
-        }
-        console.log("next-rate-limit key:", key);
-        return key;
-    });
+function defaultKey(req) {
+    const ip = getClientIp(req);
+    const path = (0, url_1.parse)(req.url, true).pathname;
+    const key = `next-rate-limit:path=${path}:ip=${ip}`;
+    return key;
 }
-function RateLimitWrap(NextApiHandler, options) {
+function RateLimitWrap(options) {
     return (req, res) => __awaiter(this, void 0, void 0, function* () {
-        const { skip, onLimitReached, maxAmount } = options;
+        const { redisClient, nextApiHandler, makeRule, onBlock, onPass, onError } = options;
         try {
-            const key = yield getKey(req, options);
-            if (skip && (yield skip(req, key))) {
-                return yield NextApiHandler(req, res); // 没有限流，调用下一层
+            let { maxCount, windowMs, redisKey } = yield makeRule();
+            if (!redisKey) {
+                redisKey = defaultKey(req);
             }
-            const count = yield getCurrentCount(key, options);
-            if (count > maxAmount) {
-                if (onLimitReached) {
-                    return yield onLimitReached(req, res, NextApiHandler, key, count);
+            console.log("next-rate-limit redisKey:", redisKey);
+            const redisCount = yield getCurrentCount(redisClient, redisKey, windowMs);
+            if (redisCount > maxCount) {
+                if (onBlock) {
+                    return yield onBlock({ req, res, redisKey, redisCount, nextApiHandler });
                 }
                 else {
                     res.status(429).json({ code: 1, errMsg: "Too many requests" });
                 }
             }
             else {
-                return yield NextApiHandler(req, res); // 没有限流，调用下一层
+                if (onPass) {
+                    return yield onPass({
+                        req,
+                        res,
+                        nextApiHandler,
+                        redisKey,
+                        redisCount,
+                    });
+                }
+                else {
+                    return yield nextApiHandler(req, res); //  没到上限，放行
+                }
             }
         }
-        catch (error) { }
+        catch (e) {
+            if (onError) {
+                const error = e;
+                return yield onError({ error, req, res, nextApiHandler });
+            }
+            else {
+                res.status(500).json({ code: 1, errMsg: "Internal Server Error" });
+            }
+        }
     });
 }
 exports.RateLimitWrap = RateLimitWrap;

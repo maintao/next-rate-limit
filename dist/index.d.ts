@@ -1,13 +1,37 @@
+/// <reference types="node" />
 import { NextApiRequest, NextApiResponse, NextApiHandler } from "next";
 import { Redis } from "ioredis";
+import { UrlWithParsedQuery } from "url";
 export type RateLimitOptions = {
     redisClient: Redis;
-    windowMs: number;
-    maxAmount: number;
-    keyGenerator?: (req: NextApiRequest) => Promise<string>;
-    onLimitReached?: (req: NextApiRequest, res: NextApiResponse, handler: NextApiHandler, redisKey: string, redisValue: number) => Promise<void>;
-    skip?: (req: NextApiRequest, key: string) => Promise<boolean>;
+    nextApiHandler: NextApiHandler;
+    makeRule: () => Promise<{
+        maxCount: number;
+        windowMs: number;
+        redisKey?: string;
+    }>;
+    onBlock?: (ctx: {
+        req: NextApiRequest;
+        res: NextApiResponse;
+        nextApiHandler: NextApiHandler;
+        redisKey: string;
+        redisCount: number;
+    }) => Promise<void>;
+    onPass?: (ctx: {
+        req: NextApiRequest;
+        res: NextApiResponse;
+        nextApiHandler: NextApiHandler;
+        redisKey: string;
+        redisCount: number;
+    }) => Promise<void>;
+    onError?: (ctx: {
+        error: Error;
+        req: NextApiRequest;
+        res: NextApiResponse;
+        nextApiHandler: NextApiHandler;
+    }) => Promise<void>;
 };
 export declare function getClientIp(req: NextApiRequest): string | string[] | undefined;
-export declare function RateLimitWrap(NextApiHandler: NextApiHandler, options: RateLimitOptions): NextApiHandler;
+export declare function getUrlWithParsedQuery(req: NextApiRequest): UrlWithParsedQuery;
+export declare function RateLimitWrap(options: RateLimitOptions): NextApiHandler;
 //# sourceMappingURL=index.d.ts.map

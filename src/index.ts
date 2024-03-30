@@ -1,21 +1,40 @@
 import { NextApiRequest, NextApiResponse, NextApiHandler } from "next";
 import { Redis } from "ioredis"; // 使用 ioredis 的类型
-import { parse } from "url";
+import { UrlWithParsedQuery, parse } from "url";
 
 export type RateLimitOptions = {
   redisClient: Redis;
-  windowMs: number; // 单位是豪秒
-  maxAmount: number;
-  keyGenerator?: (req: NextApiRequest) => Promise<string>; // 根据实际上下文（ctx）类型替换 'any'
-  onLimitReached?: (
-    req: NextApiRequest,
-    res: NextApiResponse,
-    handler: NextApiHandler,
-    redisKey: string,
-    redisValue: number
-  ) => Promise<void>;
-  skip?: (req: NextApiRequest, key: string) => Promise<boolean>; // 反悔 true 则跳过限流
-  // onError?: (err: Error, ctx: any, next: () => Promise<any>) => Promise<void>;
+  nextApiHandler: NextApiHandler;
+
+  // 用户需要主动调用这个函数，返回限流规则，限流规则须包含指定字段
+  makeRule: () => Promise<{
+    maxCount: number;
+    windowMs: number; // 单位是豪秒
+    redisKey?: string;
+  }>;
+
+  onBlock?: (ctx: {
+    req: NextApiRequest;
+    res: NextApiResponse;
+    nextApiHandler: NextApiHandler;
+    redisKey: string;
+    redisCount: number;
+  }) => Promise<void>;
+
+  onPass?: (ctx: {
+    req: NextApiRequest;
+    res: NextApiResponse;
+    nextApiHandler: NextApiHandler;
+    redisKey: string;
+    redisCount: number;
+  }) => Promise<void>;
+
+  onError?: (ctx: {
+    error: Error;
+    req: NextApiRequest;
+    res: NextApiResponse;
+    nextApiHandler: NextApiHandler;
+  }) => Promise<void>;
 };
 
 export function getClientIp(req: NextApiRequest) {
@@ -23,23 +42,21 @@ export function getClientIp(req: NextApiRequest) {
   return ip;
 }
 
-const getCurrentCount = async (redisKey: string, { redisClient, windowMs }: RateLimitOptions) => {
+export function getUrlWithParsedQuery(req: NextApiRequest): UrlWithParsedQuery {
+  return parse(req.url as string, true);
+}
+
+const getCurrentCount = async (redisClient: Redis, redisKey: string, windowMs: number) => {
   return new Promise<number>((resolve, reject) => {
     const lua = `
-    local current
-    current = tonumber(redis.call("incr", KEYS[1]))
-    if current == 1 then
+    local count
+    count = tonumber(redis.call("incr", KEYS[1]))
+    if count == 1 then
       redis.call("pexpire", KEYS[1], ARGV[1])
     end
-    return current`;
-    function errorNextApiHandler(err: Error) {
-      reject(err);
-    }
-
-    redisClient.once("error", errorNextApiHandler);
+    return count`;
 
     redisClient.eval(lua, 1, redisKey, windowMs, (err, result) => {
-      redisClient.removeListener("error", errorNextApiHandler);
       if (err) {
         reject(err);
       } else {
@@ -49,43 +66,51 @@ const getCurrentCount = async (redisKey: string, { redisClient, windowMs }: Rate
   });
 };
 
-async function getKey(req: NextApiRequest, { keyGenerator }: RateLimitOptions): Promise<string> {
-  let key;
-  if (keyGenerator) {
-    key = await keyGenerator(req);
-  } else {
-    // 没指定 keyGenerator，使用默认的规则：根据请求的路径和 IP 生成 key
-    const ip = getClientIp(req);
-    const path = parse(req.url as string, true).pathname;
-    key = `next-rate-limit:path=${path}:ip=${ip}`;
-  }
-  console.log("next-rate-limit key:", key);
+function defaultKey(req: NextApiRequest): string {
+  const ip = getClientIp(req);
+  const path = parse(req.url as string, true).pathname;
+  const key = `next-rate-limit:path=${path}:ip=${ip}`;
   return key;
 }
 
-export function RateLimitWrap(
-  NextApiHandler: NextApiHandler,
-  options: RateLimitOptions
-): NextApiHandler {
+export function RateLimitWrap(options: RateLimitOptions): NextApiHandler {
   return async (req: NextApiRequest, res: NextApiResponse) => {
-    const { skip, onLimitReached, maxAmount } = options;
+    const { redisClient, nextApiHandler, makeRule, onBlock, onPass, onError } = options;
+
     try {
-      const key = await getKey(req, options);
-
-      if (skip && (await skip(req, key))) {
-        return await NextApiHandler(req, res); // 没有限流，调用下一层
+      let { maxCount, windowMs, redisKey } = await makeRule();
+      if (!redisKey) {
+        redisKey = defaultKey(req);
       }
+      console.log("next-rate-limit redisKey:", redisKey);
 
-      const count = await getCurrentCount(key, options);
-      if (count > maxAmount) {
-        if (onLimitReached) {
-          return await onLimitReached(req, res, NextApiHandler, key, count);
+      const redisCount = await getCurrentCount(redisClient, redisKey, windowMs);
+      if (redisCount > maxCount) {
+        if (onBlock) {
+          return await onBlock({ req, res, redisKey, redisCount, nextApiHandler });
         } else {
           res.status(429).json({ code: 1, errMsg: "Too many requests" });
         }
       } else {
-        return await NextApiHandler(req, res); // 没有限流，调用下一层
+        if (onPass) {
+          return await onPass({
+            req,
+            res,
+            nextApiHandler,
+            redisKey,
+            redisCount,
+          });
+        } else {
+          return await nextApiHandler(req, res); //  没到上限，放行
+        }
       }
-    } catch (error) {}
+    } catch (e) {
+      if (onError) {
+        const error = e as Error;
+        return await onError({ error, req, res, nextApiHandler });
+      } else {
+        res.status(500).json({ code: 1, errMsg: "Internal Server Error" });
+      }
+    }
   };
 }
