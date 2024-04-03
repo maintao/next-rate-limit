@@ -19,7 +19,7 @@ export type RateLimitOptions = {
     nextApiHandler: NextApiHandler;
     redisKey: string;
     redisCount: number;
-    expireDate: Date; // 到这个时间又可以访问了
+    expireTimestamp: number; // 到这个时间又可以访问了
   }) => Promise<void>;
 
   onPass?: (ctx: {
@@ -88,9 +88,9 @@ export function RateLimitWrap(options: RateLimitOptions): NextApiHandler {
       const redisCount = await getCurrentCount(redisClient, redisKey, windowMs);
       if (redisCount > maxCount) {
         const ttlMs = await redisClient.pttl(redisKey); // 还有多少毫秒过期
-        const expireDate = new Date(Date.now() + ttlMs);
+        const expireTimestamp = Date.now() + ttlMs;
         if (onBlock) {
-          return await onBlock({ req, res, redisKey, redisCount, nextApiHandler, expireDate });
+          return await onBlock({ req, res, redisKey, redisCount, nextApiHandler, expireTimestamp });
         } else {
           res.status(429).json({ code: 1, errMsg: "Too many requests" });
         }

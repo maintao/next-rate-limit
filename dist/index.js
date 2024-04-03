@@ -57,9 +57,9 @@ function RateLimitWrap(options) {
             const redisCount = yield getCurrentCount(redisClient, redisKey, windowMs);
             if (redisCount > maxCount) {
                 const ttlMs = yield redisClient.pttl(redisKey); // 还有多少毫秒过期
-                const expireDate = new Date(Date.now() + ttlMs);
+                const expireTimestamp = Date.now() + ttlMs;
                 if (onBlock) {
-                    return yield onBlock({ req, res, redisKey, redisCount, nextApiHandler, expireDate });
+                    return yield onBlock({ req, res, redisKey, redisCount, nextApiHandler, expireTimestamp });
                 }
                 else {
                     res.status(429).json({ code: 1, errMsg: "Too many requests" });
