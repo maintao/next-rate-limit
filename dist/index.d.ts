@@ -16,6 +16,7 @@ export type RateLimitOptions = {
         nextApiHandler: NextApiHandler;
         redisKey: string;
         redisCount: number;
+        expireDate: Date;
     }) => Promise<void>;
     onPass?: (ctx: {
         req: NextApiRequest;
