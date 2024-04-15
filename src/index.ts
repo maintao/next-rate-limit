@@ -5,6 +5,7 @@ import { UrlWithParsedQuery, parse } from "url";
 export type RateLimitOptions = {
   redisClient: Redis;
   nextApiHandler: NextApiHandler;
+  defaultKeyPrefix?: string;
 
   // 用户需要主动调用这个函数，返回限流规则，限流规则须包含指定字段
   makeRule: () => Promise<{
@@ -67,10 +68,13 @@ const getCurrentCount = async (redisClient: Redis, redisKey: string, windowMs: n
   });
 };
 
-function defaultKey(req: NextApiRequest): string {
+function defaultKey(req: NextApiRequest, { defaultKeyPrefix }: RateLimitOptions): string {
   const ip = getClientIp(req);
   const path = parse(req.url as string, true).pathname;
-  const key = `next-rate-limit:path=${path}:ip=${ip}`;
+  let key = `next-rate-limit:path=${path}:ip=${ip}`;
+  if (defaultKeyPrefix) {
+    key = `${defaultKeyPrefix}:${key}`;
+  }
   return key;
 }
 
@@ -81,7 +85,7 @@ export function RateLimitWrap(options: RateLimitOptions): NextApiHandler {
     try {
       let { maxCount, windowMs, redisKey } = await makeRule();
       if (!redisKey) {
-        redisKey = defaultKey(req);
+        redisKey = defaultKey(req, options);
       }
       console.log("next-rate-limit redisKey:", redisKey);
 
