@@ -39,10 +39,13 @@ const getCurrentCount = (redisClient, redisKey, windowMs) => __awaiter(void 0, v
         });
     });
 });
-function defaultKey(req) {
+function defaultKey(req, { defaultKeyPrefix }) {
     const ip = getClientIp(req);
     const path = (0, url_1.parse)(req.url, true).pathname;
-    const key = `next-rate-limit:path=${path}:ip=${ip}`;
+    let key = `next-rate-limit:path=${path}:ip=${ip}`;
+    if (defaultKeyPrefix) {
+        key = `${defaultKeyPrefix}:${key}`;
+    }
     return key;
 }
 function RateLimitWrap(options) {
@@ -51,7 +54,7 @@ function RateLimitWrap(options) {
         try {
             let { maxCount, windowMs, redisKey } = yield makeRule();
             if (!redisKey) {
-                redisKey = defaultKey(req);
+                redisKey = defaultKey(req, options);
             }
             console.log("next-rate-limit redisKey:", redisKey);
             const redisCount = yield getCurrentCount(redisClient, redisKey, windowMs);

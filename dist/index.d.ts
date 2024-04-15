@@ -5,6 +5,7 @@ import { UrlWithParsedQuery } from "url";
 export type RateLimitOptions = {
     redisClient: Redis;
     nextApiHandler: NextApiHandler;
+    defaultKeyPrefix?: string;
     makeRule: () => Promise<{
         maxCount: number;
         windowMs: number;
